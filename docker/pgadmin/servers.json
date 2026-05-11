@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Social Feed Postgres",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "social_feed",
+      "Username": "social_feed",
+      "SSLMode": "prefer"
+    }
+  }
+}
