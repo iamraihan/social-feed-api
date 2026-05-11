@@ -1,0 +1,25 @@
+enum UserStatus {
+    ACTIVE
+    BLOCKED
+    DELETED
+}
+
+model User {
+    id String @id @default(uuid())
+
+    // Identity (firstName + lastName required by spec; email is RFC 5321 max length)
+    firstName String @map("first_name") @db.VarChar(80)
+    lastName  String @map("last_name") @db.VarChar(80)
+    email     String @unique @db.VarChar(254)
+
+    // Credentials — stores a bcrypt/argon2 hash; never plaintext
+    password String
+
+    // Avatar — object-storage key (not URL); signed URL generated at read time
+    avatarKey String? @map("avatar_key") @db.VarChar(512)
+
+    // Lifecycle — soft-delete via status=DELETED is applied by prisma extension
+    status UserStatus @default(ACTIVE)
+
+    // Timestamps
+    createdAt DateTime @default(now()) @map("created_at")
