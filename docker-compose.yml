@@ -39,11 +39,30 @@ services:
     networks:
       - social-feed-net
 
+  redis:
+    image: redis:7-alpine
+    container_name: social-feed-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - social-feed-net
+
 volumes:
   postgres_data:
     name: social-feed-postgres-data
   pgadmin_data:
     name: social-feed-pgadmin-data
+  redis_data:
+    name: social-feed-redis-data
 
 networks:
   social-feed-net:

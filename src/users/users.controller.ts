@@ -8,34 +8,49 @@ import {
   Param,
   ParseUUIDPipe,
   Patch,
+  UseGuards,
 } from '@nestjs/common';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { JwtStrictAuthGuard } from '../auth/guards/jwt-strict-auth.guard';
+import type { JwtPayload } from '../auth/strategies/jwt.strategy';
 import { UpdateUserDto } from './dto';
 import { UsersService } from './users.service';
 
-// TODO(auth-branch): all endpoints require an authenticated user.
-// PATCH and DELETE additionally require an ownership check — the JWT-derived
-// requester id must match :id. Wire JwtAuthGuard + a CurrentUser decorator,
-// then add a parallel `/users/me` set that resolves :id from the JWT.
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  @Get(':id')
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.usersService.findPublicById(id);
+  // Self-view routes come first so the static `me` segment is matched before
+  // the `:id` parameter route.
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  async me(@CurrentUser() current: JwtPayload) {
+    return this.usersService.findById(current.sub);
   }
 
-  @Patch(':id')
-  async update(
-    @Param('id', ParseUUIDPipe) id: string,
+  // Profile edits go through the strict guard — a stale access token whose
+  // user has been mass-revoked must not be able to mutate the account.
+  @Patch('me')
+  @UseGuards(JwtStrictAuthGuard)
+  async updateMe(
+    @CurrentUser() current: JwtPayload,
     @Body() dto: UpdateUserDto,
   ) {
-    return this.usersService.update(id, dto);
+    return this.usersService.update(current.sub, dto);
   }
 
-  @Delete(':id')
+  @Delete('me')
+  @UseGuards(JwtStrictAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.usersService.softDelete(id);
+  async removeMe(@CurrentUser() current: JwtPayload) {
+    return this.usersService.softDelete(current.sub);
+  }
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.findPublicById(id);
   }
 }
