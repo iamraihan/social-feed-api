@@ -1,6 +1,7 @@
 import {
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -100,18 +101,27 @@ export class AuthService implements OnModuleInit {
     // Either the legitimate client is racing itself, or an attacker copied
     // the token. Treat as compromise: revoke the family, blocklist the user
     // for the access-token lifetime, force re-login.
+    //
+    // Log the event with full forensic context. In production this line is
+    // the hook for security alerting (Sentry / PagerDuty / SIEM).
     if (record.used) {
       this.logger.warn(
-        `Refresh token reuse detected — revoking family ${record.familyId} for user ${record.userId}`,
+        `[SECURITY] refresh_token_reuse_detected ` +
+          `family=${record.familyId} user=${record.userId} ` +
+          `ip=${ctx.ipAddress ?? 'unknown'} ` +
+          `ua=${JSON.stringify(ctx.userAgent ?? 'unknown')}`,
       );
       await this.refreshTokens.revokeFamily(record.familyId);
       await this.blocklist.blockUser(record.userId);
       throw new UnauthorizedException('Refresh token reuse detected');
     }
 
-    const user = await this.usersService
-      .findById(record.userId)
-      .catch(() => null);
+    // Narrow the catch to NotFoundException so transient DB errors surface as
+    // 500 instead of being misdiagnosed as "account inactive".
+    const user = await this.usersService.findById(record.userId).catch((e) => {
+      if (e instanceof NotFoundException) return null;
+      throw e;
+    });
     if (!user || user.status !== 'ACTIVE') {
       await this.refreshTokens.revokeFamily(record.familyId);
       throw new UnauthorizedException('Account is no longer active');

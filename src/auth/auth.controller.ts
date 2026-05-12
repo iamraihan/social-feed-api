@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { CreateUserDto } from '../users/dto';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -38,6 +39,8 @@ export class AuthController {
     private readonly configService: ConfigService,
   ) {}
 
+  // 5 registrations per IP per minute — slows mass account creation.
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post('register')
   async register(
     @Body() dto: CreateUserDto,
@@ -53,6 +56,9 @@ export class AuthController {
     return tokens;
   }
 
+  // 10 login attempts per IP per minute — blocks credential-stuffing/brute
+  // force at the network edge before bcrypt even runs.
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -70,6 +76,9 @@ export class AuthController {
     return tokens;
   }
 
+  // 30 refreshes per IP per minute — legit clients refresh ~once every 15min,
+  // so this leaves headroom for retries but caps abuse with a stolen cookie.
+  @Throttle({ default: { ttl: 60_000, limit: 30 } })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(
