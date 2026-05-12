@@ -6,6 +6,9 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUrl,
+  Max,
+  Min,
   MinLength,
   validateSync,
 } from 'class-validator';
@@ -25,12 +28,18 @@ class EnvironmentVariables {
   NODE_ENV: NodeEnvironment = NodeEnvironment.Development;
 
   @IsNumber()
+  @Min(1)
+  @Max(65535)
   @IsOptional()
   PORT: number = 3000;
 
   // ---- Database ----
-  @IsString()
-  @IsNotEmpty()
+  // Catch literal "undefined" / typo'd strings that pass plain @IsString.
+  @IsUrl({
+    protocols: ['postgresql', 'postgres'],
+    require_tld: false,
+    require_protocol: true,
+  })
   DATABASE_URL!: string;
 
   @IsString()
@@ -38,6 +47,8 @@ class EnvironmentVariables {
   POSTGRES_HOST!: string;
 
   @IsNumber()
+  @Min(1)
+  @Max(65535)
   POSTGRES_PORT!: number;
 
   @IsString()
@@ -63,10 +74,18 @@ class EnvironmentVariables {
   })
   JWT_ACCESS_SECRET!: string;
 
+  // 60s floor prevents "born expired" tokens; 24h ceiling caps the blast
+  // radius of a leaked access token at the cost of a few extra refreshes.
   @IsNumber()
+  @Min(60)
+  @Max(86_400)
   ACCESS_TOKEN_TTL_SECONDS!: number;
 
+  // 1-day floor matches the cleanup-cron's used-row retention; 90 days is the
+  // longest sane refresh window before forcing re-login on inactive users.
   @IsNumber()
+  @Min(1)
+  @Max(90)
   REFRESH_TOKEN_TTL_DAYS!: number;
 
   // ---- Cookies ----
@@ -88,6 +107,8 @@ class EnvironmentVariables {
   REDIS_HOST!: string;
 
   @IsNumber()
+  @Min(1)
+  @Max(65535)
   REDIS_PORT!: number;
 
   @IsString()

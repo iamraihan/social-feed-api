@@ -11,9 +11,13 @@ async function bootstrap() {
   // Behind any reverse proxy (k8s ingress, nginx, Cloudflare, ELB), `req.ip`
   // is the proxy address unless we tell Express to honor X-Forwarded-For.
   // Without this, the rate limiter buckets every client together and one user
-  // can lock out everyone else. `1` = trust the first hop; adjust to a CIDR
-  // list if you have multi-layer proxies.
-  app.set('trust proxy', 1);
+  // can lock out everyone else. The default of 1 trusts the first hop; bump
+  // via env when deploying behind multiple proxies (ingress + service mesh).
+  const trustedProxyHops = parseInt(process.env.TRUSTED_PROXY_HOPS ?? '1', 10);
+  app.set(
+    'trust proxy',
+    Number.isFinite(trustedProxyHops) ? trustedProxyHops : 1,
+  );
 
   // Standard security headers (X-Frame-Options, HSTS in prod, X-Content-Type
   // -Options, etc.). Defaults are sensible — only relax if a specific feature

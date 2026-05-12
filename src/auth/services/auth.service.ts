@@ -105,7 +105,10 @@ export class AuthService implements OnModuleInit {
     // Log the event with full forensic context. In production this line is
     // the hook for security alerting (Sentry / PagerDuty / SIEM).
     if (record.used) {
-      this.logger.warn(
+      // Logged at ERROR level (not warn) — this is a compromise indicator,
+      // not a routine event. Production log aggregators page on-call for
+      // errors but typically not for warnings.
+      this.logger.error(
         `[SECURITY] refresh_token_reuse_detected ` +
           `family=${record.familyId} user=${record.userId} ` +
           `ip=${ctx.ipAddress ?? 'unknown'} ` +
