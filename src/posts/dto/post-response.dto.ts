@@ -10,10 +10,12 @@ export class PostDto {
   imageUrl!: string | null;
   visibility!: PostVisibility;
   author!: PublicUserDto;
+  // Populated by the likes module via batched queries on list reads, single
+  // queries on detail reads. Always present; 0 / false when no likes exist.
+  likeCount!: number;
+  hasLiked!: boolean;
   createdAt!: Date;
   updatedAt!: Date;
-  // likeCount and hasLiked are intentionally absent. They'll be populated by
-  // the likes module when it's wired into the feed query in a later PR.
 }
 
 // Service-level return shape for paginated lists. The ResponseInterceptor

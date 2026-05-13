@@ -29,6 +29,7 @@ model User {
     refreshTokens RefreshToken[]
     posts         Post[]
     comments      Comment[]
+    likes         Like[]
 
     @@index([email, status])
     @@map("users")

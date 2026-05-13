@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { LikesService } from '../likes/likes.service';
 import { ImageProcessor } from '../storage/image-processor.service';
 import { StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -17,6 +18,14 @@ import { CreatePostDto, FeedDto, FeedQueryDto, PostDto } from './dto';
 export interface UploadedImage {
   buffer: Buffer;
   mimetype: string;
+}
+
+// Per-row like state attached to a PostDto. Defaulted to 0 / false at the
+// mapper so callers can omit it for paths where likes are irrelevant
+// (newly-created posts, etc.).
+interface LikeState {
+  likeCount: number;
+  hasLiked: boolean;
 }
 
 // Shared selection shape: every read goes through this so the response shape
@@ -41,6 +50,7 @@ export class PostsService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly imageProcessor: ImageProcessor,
+    private readonly likes: LikesService,
   ) {}
 
   async create(
@@ -60,14 +70,16 @@ export class PostsService {
       select: POST_SELECT,
     });
 
+    // Brand-new post — likeCount and hasLiked are known to be 0 / false; no
+    // need to ask the likes service. Saves two queries per create.
     return this.toPostDto(post);
   }
 
-  // Lightweight visibility check for other modules (comments, future likes
-  // wire-up) that need "does this post exist and can this viewer see it?"
-  // without paying for the full PostDto SELECT + author join. Throws 404 for
-  // both missing and private-non-author — same no-enumeration semantics as
-  // findOne, just cheaper at scale.
+  // Lightweight visibility check for other modules (comments, likes) that need
+  // "does this post exist and can this viewer see it?" without paying for the
+  // full PostDto SELECT + author join. Throws 404 for both missing and
+  // private-non-author — same no-enumeration semantics as findOne, just
+  // cheaper at scale.
   async assertVisible(id: string, viewerId: string): Promise<void> {
     const post = await this.prisma.db.post.findUnique({
       where: { id },
@@ -98,7 +110,14 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    return this.toPostDto(post);
+    // Two queries in parallel — like state is per-target, no batching benefit
+    // for a single resource read.
+    const [likeCount, hasLiked] = await Promise.all([
+      this.likes.countByTarget('POST', id),
+      this.likes.hasUserLiked(viewerId, 'POST', id),
+    ]);
+
+    return this.toPostDto(post, { likeCount, hasLiked });
   }
 
   async listFeed(viewerId: string, query: FeedQueryDto): Promise<FeedDto> {
@@ -123,8 +142,21 @@ export class PostsService {
     });
 
     const hasMore = rows.length > limit;
-    const items = (hasMore ? rows.slice(0, -1) : rows).map((p) =>
-      this.toPostDto(p),
+    const sliced = hasMore ? rows.slice(0, -1) : rows;
+
+    // N+1 protection: batch both like-related lookups in parallel. Result is
+    // 2 extra queries total for the page, regardless of page size — not 2N.
+    const postIds = sliced.map((p) => p.id);
+    const [likeCounts, likedIds] = await Promise.all([
+      this.likes.getLikeCountsForTargets('POST', postIds),
+      this.likes.getLikedTargetIdsForUser(viewerId, 'POST', postIds),
+    ]);
+
+    const items = sliced.map((p) =>
+      this.toPostDto(p, {
+        likeCount: likeCounts.get(p.id) ?? 0,
+        hasLiked: likedIds.has(p.id),
+      }),
     );
 
     // { data, meta } shape is recognized by ResponseInterceptor and surfaced
@@ -169,7 +201,14 @@ export class PostsService {
       select: POST_SELECT,
     });
 
-    return this.toPostDto(updated);
+    // Return final state including like state — the deletion doesn't remove
+    // the likes row (FK is on userId, not on a polymorphic targetId).
+    const [likeCount, hasLiked] = await Promise.all([
+      this.likes.countByTarget('POST', id),
+      this.likes.hasUserLiked(requesterId, 'POST', id),
+    ]);
+
+    return this.toPostDto(updated, { likeCount, hasLiked });
   }
 
   // ---------- internals ----------
@@ -179,22 +218,10 @@ export class PostsService {
     return this.storage.save(processed, { prefix: 'posts', ext: 'webp' });
   }
 
-  private toPostDto(post: {
-    id: string;
-    content: string;
-    imageKey: string | null;
-    visibility: 'PUBLIC' | 'PRIVATE';
-    authorId: string;
-    status: 'ACTIVE' | 'DELETED';
-    createdAt: Date;
-    updatedAt: Date;
-    author: {
-      id: string;
-      firstName: string;
-      lastName: string;
-      avatarKey: string | null;
-    };
-  }): PostDto {
+  private toPostDto(
+    post: Prisma.PostGetPayload<{ select: typeof POST_SELECT }>,
+    likeState: LikeState = { likeCount: 0, hasLiked: false },
+  ): PostDto {
     return {
       id: post.id,
       content: post.content,
@@ -202,6 +229,8 @@ export class PostsService {
       imageUrl: this.storage.url(post.imageKey),
       visibility: post.visibility,
       author: post.author,
+      likeCount: likeState.likeCount,
+      hasLiked: likeState.hasLiked,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
     };

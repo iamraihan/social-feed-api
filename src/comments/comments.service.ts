@@ -4,7 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { LikeTargetType, Prisma } from '@prisma/client';
+import { LikesService } from '../likes/likes.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PostsService } from '../posts/posts.service';
 import { PUBLIC_USER_SELECT } from '../users/users.service';
@@ -37,11 +38,19 @@ const COMMENT_SELECT = {
   },
 } satisfies Prisma.CommentSelect;
 
+// Per-row like state. Defaults applied at the mapper so create paths can pass
+// nothing and still get a complete DTO shape.
+interface LikeState {
+  likeCount: number;
+  hasLiked: boolean;
+}
+
 @Injectable()
 export class CommentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly postsService: PostsService,
+    private readonly likes: LikesService,
   ) {}
 
   async createForPost(
@@ -57,6 +66,7 @@ export class CommentsService {
       data: { postId, authorId, content: dto.content, parentId: null },
       select: COMMENT_SELECT,
     });
+    // Brand-new comment: likeCount=0, hasLiked=false. No need to ask likes.
     return this.toCommentDto(created);
   }
 
@@ -88,8 +98,6 @@ export class CommentsService {
     }
 
     // Inline post-visibility check — same 404 semantics as assertVisible.
-    // Private posts the viewer can't see surface as "not found" so existence
-    // doesn't leak via response code.
     if (
       parent.post.visibility === 'PRIVATE' &&
       parent.post.authorId !== authorId
@@ -114,7 +122,6 @@ export class CommentsService {
     viewerId: string,
     query: ListCommentsQueryDto,
   ): Promise<CommentListDto> {
-    // Same visibility rule as readers of the post itself — private = 404.
     await this.postsService.assertVisible(postId, viewerId);
 
     const { cursor, limit } = query;
@@ -128,7 +135,7 @@ export class CommentsService {
       select: COMMENT_SELECT,
     });
 
-    return this.toPaginated(rows, limit);
+    return this.toPaginated(rows, limit, viewerId, 'COMMENT');
   }
 
   async listReplies(
@@ -170,13 +177,13 @@ export class CommentsService {
       select: COMMENT_SELECT,
     });
 
-    return this.toPaginated(rows, limit);
+    return this.toPaginated(rows, limit, viewerId, 'REPLY');
   }
 
   async softDelete(id: string, requesterId: string): Promise<CommentDto> {
     const comment = await this.prisma.db.comment.findUnique({
       where: { id },
-      select: { id: true, authorId: true },
+      select: { id: true, authorId: true, parentId: true },
     });
 
     if (!comment) throw new NotFoundException('Comment not found');
@@ -193,18 +200,43 @@ export class CommentsService {
       select: COMMENT_SELECT,
     });
 
-    return this.toCommentDto(updated);
+    // Type is determined by parent_id: null → COMMENT, non-null → REPLY.
+    // Likes survive soft-delete (no FK cascade on polymorphic target_id),
+    // so report the actual current state in the response.
+    const targetType: LikeTargetType =
+      comment.parentId === null ? 'COMMENT' : 'REPLY';
+    const [likeCount, hasLiked] = await Promise.all([
+      this.likes.countByTarget(targetType, id),
+      this.likes.hasUserLiked(requesterId, targetType, id),
+    ]);
+
+    return this.toCommentDto(updated, { likeCount, hasLiked });
   }
 
   // ---------- internals ----------
 
-  private toPaginated(
+  // N+1 protection: batch both like lookups in parallel for the entire page.
+  // Result: 2 extra queries total regardless of page size — not 2N.
+  private async toPaginated(
     rows: Array<Prisma.CommentGetPayload<{ select: typeof COMMENT_SELECT }>>,
     limit: number,
-  ): CommentListDto {
+    viewerId: string,
+    targetType: LikeTargetType,
+  ): Promise<CommentListDto> {
     const hasMore = rows.length > limit;
-    const items = (hasMore ? rows.slice(0, -1) : rows).map((r) =>
-      this.toCommentDto(r),
+    const sliced = hasMore ? rows.slice(0, -1) : rows;
+
+    const commentIds = sliced.map((r) => r.id);
+    const [likeCounts, likedIds] = await Promise.all([
+      this.likes.getLikeCountsForTargets(targetType, commentIds),
+      this.likes.getLikedTargetIdsForUser(viewerId, targetType, commentIds),
+    ]);
+
+    const items = sliced.map((r) =>
+      this.toCommentDto(r, {
+        likeCount: likeCounts.get(r.id) ?? 0,
+        hasLiked: likedIds.has(r.id),
+      }),
     );
 
     return {
@@ -219,6 +251,7 @@ export class CommentsService {
 
   private toCommentDto(
     row: Prisma.CommentGetPayload<{ select: typeof COMMENT_SELECT }>,
+    likeState: LikeState = { likeCount: 0, hasLiked: false },
   ): CommentDto {
     return {
       id: row.id,
@@ -227,6 +260,8 @@ export class CommentsService {
       content: row.content,
       author: row.author,
       replyCount: row._count.replies,
+      likeCount: likeState.likeCount,
+      hasLiked: likeState.hasLiked,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

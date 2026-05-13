@@ -11,10 +11,12 @@ export class CommentDto {
   // 1-level-nesting model, but included on every row for response shape
   // consistency — frontends conditionally render the "View N replies" UI.
   replyCount!: number;
+  // Populated by the likes module via batched queries on list reads.
+  // Always present; 0 / false when no likes exist.
+  likeCount!: number;
+  hasLiked!: boolean;
   createdAt!: Date;
   updatedAt!: Date;
-  // likeCount and hasLiked are intentionally absent. The likes module wires
-  // them in when both branches land.
 }
 
 // Service-level return shape for paginated comment lists. Recognized by
