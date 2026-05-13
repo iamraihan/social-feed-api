@@ -65,9 +65,18 @@ export class CommentsService {
     parentCommentId: string,
     dto: CreateCommentDto,
   ): Promise<CommentDto> {
+    // Join the post in this same lookup so the visibility check below is
+    // "free" — saves a DB round-trip vs calling postsService.assertVisible
+    // separately. The two fields are tiny; the JOIN is cheaper than a second
+    // network roundtrip.
     const parent = await this.prisma.db.comment.findUnique({
       where: { id: parentCommentId },
-      select: { id: true, postId: true, parentId: true },
+      select: {
+        id: true,
+        postId: true,
+        parentId: true,
+        post: { select: { authorId: true, visibility: true } },
+      },
     });
 
     if (!parent) throw new NotFoundException('Comment not found');
@@ -78,9 +87,15 @@ export class CommentsService {
       throw new BadRequestException('Cannot reply to a reply');
     }
 
-    // Re-check post visibility — the post could have flipped from PUBLIC to
-    // PRIVATE between the parent comment's creation and now.
-    await this.postsService.assertVisible(parent.postId, authorId);
+    // Inline post-visibility check — same 404 semantics as assertVisible.
+    // Private posts the viewer can't see surface as "not found" so existence
+    // doesn't leak via response code.
+    if (
+      parent.post.visibility === 'PRIVATE' &&
+      parent.post.authorId !== authorId
+    ) {
+      throw new NotFoundException('Comment not found');
+    }
 
     const reply = await this.prisma.db.comment.create({
       data: {
@@ -121,9 +136,14 @@ export class CommentsService {
     viewerId: string,
     query: ListCommentsQueryDto,
   ): Promise<CommentListDto> {
+    // Same JOIN trick as createReply — saves the separate assertVisible call.
     const parent = await this.prisma.db.comment.findUnique({
       where: { id: parentCommentId },
-      select: { postId: true, parentId: true },
+      select: {
+        postId: true,
+        parentId: true,
+        post: { select: { authorId: true, visibility: true } },
+      },
     });
 
     if (!parent) throw new NotFoundException('Comment not found');
@@ -132,8 +152,12 @@ export class CommentsService {
         'Replies can only be listed on top-level comments',
       );
     }
-
-    await this.postsService.assertVisible(parent.postId, viewerId);
+    if (
+      parent.post.visibility === 'PRIVATE' &&
+      parent.post.authorId !== viewerId
+    ) {
+      throw new NotFoundException('Comment not found');
+    }
 
     const { cursor, limit } = query;
 
