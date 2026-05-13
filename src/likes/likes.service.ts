@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { LikeTargetType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLIC_USER_SELECT } from '../users/users.service';
@@ -193,18 +197,37 @@ export class LikesService {
       }
       case 'COMMENT':
       case 'REPLY': {
-        // Both COMMENT and REPLY live in the same `comments` table — the
-        // discriminator is whether parent_id is null. We don't require the
-        // caller's `type` to match parent_id state because that's a UX
-        // distinction, not a security one; what matters is the post is
-        // visible to this viewer.
+        // Both COMMENT and REPLY live in the same `comments` table; the
+        // discriminator is whether parent_id is null. We fetch parent_id in
+        // the same query (free — already on the row) and enforce that the
+        // URL's targetType matches the comment's actual shape.
+        //
+        // Why: the unique index is (userId, targetType, targetId). Without
+        // this check, a user could like a top-level comment as REPLY (or vice
+        // versa) and the constraint would allow it — same target id, different
+        // type tuple. That's two like rows for the same comment, inflating
+        // storage and skewing analytics. Cross-checking here closes that gap.
         const comment = await this.prisma.db.comment.findUnique({
           where: { id: targetId },
           select: {
+            parentId: true,
             post: { select: { authorId: true, visibility: true } },
           },
         });
         if (!comment) throw new NotFoundException('Comment not found');
+
+        const isReply = comment.parentId !== null;
+        if (targetType === 'COMMENT' && isReply) {
+          throw new BadRequestException(
+            'This is a reply — use /likes/reply/:id instead',
+          );
+        }
+        if (targetType === 'REPLY' && !isReply) {
+          throw new BadRequestException(
+            'This is a top-level comment — use /likes/comment/:id instead',
+          );
+        }
+
         if (
           comment.post.visibility === 'PRIVATE' &&
           comment.post.authorId !== viewerId
