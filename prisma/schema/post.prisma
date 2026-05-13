@@ -28,6 +28,9 @@ model Post {
     createdAt DateTime @default(now()) @map("created_at")
     updatedAt DateTime @updatedAt @map("updated_at")
 
+    // Relations
+    comments Comment[]
+
     // Hot path: public feed query — newest active public posts.
     @@index([visibility, status, createdAt(sort: Desc)])
     // Author profile / "my posts" feed — includes private posts for owner.

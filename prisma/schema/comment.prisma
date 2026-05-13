@@ -1,0 +1,45 @@
+enum CommentStatus {
+    ACTIVE
+    DELETED
+}
+
+// Comments AND replies live in the same table. parent_id is null for top-level
+// comments and set to the parent's id for replies. The spec allows one level
+// of nesting (comment → reply); the service enforces "no reply to a reply" so
+// the tree stays shallow and the API contract stays simple.
+model Comment {
+    id String @id @default(uuid())
+
+    // The post the comment lives on. Cascade so deleting a post removes its
+    // entire conversation thread.
+    postId String @map("post_id")
+    post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+    authorId String @map("author_id")
+    author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+    // Self-FK: null = top-level comment, otherwise = reply to that comment.
+    // Cascade so deleting a parent comment in the DB takes its replies too —
+    // soft-delete uses status=DELETED instead, leaving replies intact.
+    parentId String?   @map("parent_id")
+    parent   Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+    replies  Comment[] @relation("CommentReplies")
+
+    // 2000-char cap is generous for a comment; bounded for index/perf safety.
+    content String        @db.VarChar(2000)
+    status  CommentStatus @default(ACTIVE)
+
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    // Hot paths:
+    //   1. Top-level comments on a post: (post_id, parent_id IS NULL, newest)
+    //   2. Replies to a comment:         (parent_id, newest)
+    // The same composite index serves both queries — Postgres uses different
+    // leading-column subsets depending on the predicate.
+    @@index([postId, parentId, status, createdAt(sort: Desc)])
+    // "Comments by this user" — future profile feature.
+    @@index([authorId, status, createdAt(sort: Desc)])
+
+    @@map("comments")
+}
