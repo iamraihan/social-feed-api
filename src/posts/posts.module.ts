@@ -2,6 +2,7 @@ import { BadRequestException, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { LikesModule } from '../likes/likes.module';
 import { PostsController } from './posts.controller';
 import { PostsService } from './posts.service';
 
@@ -14,6 +15,10 @@ const ALLOWED_IMAGE_MIMES = new Set([
 
 @Module({
   imports: [
+    // LikesService is injected into PostsService to populate likeCount /
+    // hasLiked on read paths. LikesModule deliberately imports nothing back —
+    // see its docstring for why (avoiding a circular module dependency).
+    LikesModule,
     // Wire multer defaults through ConfigService so a single env var
     // (MAX_IMAGE_SIZE_MB) drives both validation at boot and runtime limits.
     // Decorators evaluate before DI runs, so this is the only place where

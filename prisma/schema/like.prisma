@@ -1,0 +1,34 @@
+// Polymorphic likes — the spec calls out three likeable surfaces (post,
+// comment, reply) and we model them with a single table + discriminator
+// column. Trade-off accepted: no DB-level FK on target_id (posts and comments
+// live in different tables). Existence is verified at the service layer
+// before every write.
+enum LikeTargetType {
+  POST
+  COMMENT
+  REPLY
+}
+
+model Like {
+  id String @id @default(uuid())
+
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  targetType LikeTargetType @map("target_type")
+  targetId   String         @map("target_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Enforces "one like per user per target" and serves the hot-path
+  // "has user X liked target Y?" lookup in a single composite index.
+  @@unique([userId, targetType, targetId])
+
+  // Counter / who-liked listing: GROUP BY targetId, ORDER BY createdAt DESC.
+  @@index([targetType, targetId, createdAt(sort: Desc)])
+
+  // "What has this user liked recently" — feed personalization, profile pages.
+  @@index([userId, targetType, createdAt(sort: Desc)])
+
+  @@map("likes")
+}
