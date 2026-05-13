@@ -121,6 +121,19 @@ class EnvironmentVariables {
   @IsString()
   @IsOptional()
   CORS_ORIGIN?: string;
+
+  // ---- Storage (local disk; swap to S3 / MinIO in prod) ----
+  @IsString()
+  @IsNotEmpty()
+  UPLOAD_DIR!: string;
+
+  @IsUrl({ require_tld: false, require_protocol: true })
+  PUBLIC_BASE_URL!: string;
+
+  @IsNumber()
+  @Min(1)
+  @Max(50)
+  MAX_IMAGE_SIZE_MB!: number;
 }
 
 export function validateEnvironment(config: Record<string, unknown>) {

@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import * as path from 'node:path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -46,6 +47,21 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Serve user-uploaded images from the local storage directory. Path matches
+  // what LocalStorageService.url() builds (`/uploads/<key>`). In production
+  // this would be replaced by a CDN serving from S3, but the URL shape stays
+  // the same so frontend code doesn't change.
+  //
+  // Trade-off: this serves every uploaded file without auth — including images
+  // attached to PRIVATE posts. Post visibility hides the post body and metadata
+  // (a non-author gets 404 on GET /posts/:id), but the IMAGE URL itself is
+  // public if leaked. This matches what Twitter/Instagram/Facebook do — image
+  // privacy is via URL obscurity (random UUID filenames). True per-image auth
+  // would require either signed URLs with TTL or a guarded /posts/:id/image
+  // streaming endpoint; both are reasonable next steps for a stricter spec.
+  const uploadDir = process.env.UPLOAD_DIR ?? './uploads';
+  app.useStaticAssets(path.resolve(uploadDir), { prefix: '/uploads' });
 
   // Forward SIGTERM/SIGINT into Nest lifecycle hooks — needed so Prisma and
   // the Redis client close cleanly on container stop / k8s rolling restart.

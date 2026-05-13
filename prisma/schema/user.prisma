@@ -27,6 +27,7 @@ model User {
 
     // Relations
     refreshTokens RefreshToken[]
+    posts         Post[]
 
     @@index([email, status])
     @@map("users")
