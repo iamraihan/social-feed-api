@@ -110,10 +110,15 @@ export class PostsService {
       this.toPostDto(p),
     );
 
+    // { data, meta } shape is recognized by ResponseInterceptor and surfaced
+    // at the top level of the envelope alongside success+timestamp.
     return {
-      items,
-      hasMore,
-      nextCursor: hasMore ? items[items.length - 1].id : null,
+      data: items,
+      meta: {
+        hasMore,
+        nextCursor: hasMore ? items[items.length - 1].id : null,
+        limit,
+      },
     };
   }
 
