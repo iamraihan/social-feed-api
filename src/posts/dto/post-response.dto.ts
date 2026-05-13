@@ -16,9 +16,17 @@ export class PostDto {
   // the likes module when it's wired into the feed query in a later PR.
 }
 
-export class FeedDto {
-  items!: PostDto[];
+// Service-level return shape for paginated lists. The ResponseInterceptor
+// detects { data, meta } and surfaces both at the top level of the envelope
+// rather than nesting the whole object under `data`.
+export class FeedMeta {
   hasMore!: boolean;
   // The id to pass back as `?cursor=` for the next page. Null on the last page.
   nextCursor!: string | null;
+  limit!: number;
+}
+
+export class FeedDto {
+  data!: PostDto[];
+  meta!: FeedMeta;
 }

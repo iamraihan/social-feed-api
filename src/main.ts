@@ -5,6 +5,9 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import * as path from 'node:path';
 import { AppModule } from './app.module';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
+import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -47,6 +50,16 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Wrap every successful response in the canonical envelope { success,
+  // timestamp, data, meta? }. Routes that return undefined keep an empty body
+  // so 204 No Content still works correctly.
+  app.useGlobalInterceptors(new ResponseInterceptor());
+
+  // Order matters — most-specific first. Prisma errors intercepted before
+  // the generic HTTP filter sees them so callers get semantic codes
+  // (CONFLICT, NOT_FOUND) instead of leaked Prisma codes (P2002, P2025).
+  app.useGlobalFilters(new PrismaExceptionFilter(), new HttpExceptionFilter());
 
   // Serve user-uploaded images from the local storage directory. Path matches
   // what LocalStorageService.url() builds (`/uploads/<key>`). In production
