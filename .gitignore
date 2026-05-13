@@ -49,6 +49,9 @@ lerna-debug.log*
 # Prisma
 prisma/node_modules/
 
+# User-uploaded content (runtime data, not source)
+/uploads
+
 # Runtime data
 pids
 *.pid

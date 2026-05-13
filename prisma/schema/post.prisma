@@ -1,0 +1,37 @@
+enum PostVisibility {
+    PUBLIC
+    PRIVATE
+}
+
+enum PostStatus {
+    ACTIVE
+    DELETED
+}
+
+model Post {
+    id String @id @default(uuid())
+
+    // Author of the post. Cascade so a deleted user's posts are removed too;
+    // the soft-delete extension still hides them via status while alive.
+    authorId String @map("author_id")
+    author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+    // Text body. 5000 char cap balances generosity with index/perf bounds.
+    content String @db.VarChar(5000)
+
+    // Object-storage key — not a URL. Null when the post has no image.
+    imageKey String? @map("image_key") @db.VarChar(512)
+
+    visibility PostVisibility @default(PUBLIC)
+    status     PostStatus     @default(ACTIVE)
+
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    // Hot path: public feed query — newest active public posts.
+    @@index([visibility, status, createdAt(sort: Desc)])
+    // Author profile / "my posts" feed — includes private posts for owner.
+    @@index([authorId, status, createdAt(sort: Desc)])
+
+    @@map("posts")
+}

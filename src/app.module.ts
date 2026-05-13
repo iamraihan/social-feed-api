@@ -10,16 +10,19 @@ import {
   authConfig,
   databaseConfig,
   redisConfig,
+  storageConfig,
   validateEnvironment,
 } from './config';
+import { PostsModule } from './posts/posts.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [databaseConfig, authConfig, redisConfig],
+      load: [databaseConfig, authConfig, redisConfig, storageConfig],
       envFilePath: '.env',
       validate: validateEnvironment,
     }),
@@ -28,8 +31,10 @@ import { UsersModule } from './users/users.module';
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
     ScheduleModule.forRoot(),
     PrismaModule,
+    StorageModule,
     UsersModule,
     AuthModule,
+    PostsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
