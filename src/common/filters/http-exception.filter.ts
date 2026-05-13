@@ -6,7 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { ApiErrorCode, ApiErrorResponse } from '../types/api-response.types';
 
 // Catches every HttpException (and everything else that falls through Nest's
@@ -24,6 +24,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+    // Request context shown only in logs (never in the response body) so ops
+    // can pinpoint which endpoint failed without correlating timestamps with
+    // access logs by hand.
+    const route = `${request.method} ${request.originalUrl}`;
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let code: ApiErrorCode = 'INTERNAL_SERVER_ERROR';
@@ -37,11 +42,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
       // Unhandled non-HTTP error — log the full thing for ops, but don't leak
       // the stack or internals to the client.
       this.logger.error(
-        `Unhandled exception: ${exception.message}`,
+        `Unhandled exception on ${route}: ${exception.message}`,
         exception.stack,
       );
     } else {
-      this.logger.error(`Unhandled non-Error exception: ${String(exception)}`);
+      this.logger.error(
+        `Unhandled non-Error exception on ${route}: ${String(exception)}`,
+      );
     }
 
     const body: ApiErrorResponse = {
