@@ -19,13 +19,14 @@ import {
 // `where: { status: 'ACTIVE' }` on the relation count is critical — our
 // soft-delete extension only hooks the top-level read; _count subqueries
 // bypass it and would otherwise inflate counts with soft-deleted replies.
+// authorId and status are deliberately omitted — neither appears in the
+// response DTO, and the soft-delete extension already filters DELETED rows
+// before the mapper sees them.
 const COMMENT_SELECT = {
   id: true,
   postId: true,
   parentId: true,
   content: true,
-  authorId: true,
-  status: true,
   createdAt: true,
   updatedAt: true,
   author: { select: PUBLIC_USER_SELECT },
@@ -50,7 +51,7 @@ export class CommentsService {
   ): Promise<CommentDto> {
     // Visibility check — also confirms the post exists. Private posts the
     // viewer can't see throw 404, same as the posts endpoint.
-    await this.postsService.findOne(postId, authorId);
+    await this.postsService.assertVisible(postId, authorId);
 
     const created = await this.prisma.db.comment.create({
       data: { postId, authorId, content: dto.content, parentId: null },
@@ -79,7 +80,7 @@ export class CommentsService {
 
     // Re-check post visibility — the post could have flipped from PUBLIC to
     // PRIVATE between the parent comment's creation and now.
-    await this.postsService.findOne(parent.postId, authorId);
+    await this.postsService.assertVisible(parent.postId, authorId);
 
     const reply = await this.prisma.db.comment.create({
       data: {
@@ -99,7 +100,7 @@ export class CommentsService {
     query: ListCommentsQueryDto,
   ): Promise<CommentListDto> {
     // Same visibility rule as readers of the post itself — private = 404.
-    await this.postsService.findOne(postId, viewerId);
+    await this.postsService.assertVisible(postId, viewerId);
 
     const { cursor, limit } = query;
 
@@ -132,7 +133,7 @@ export class CommentsService {
       );
     }
 
-    await this.postsService.findOne(parent.postId, viewerId);
+    await this.postsService.assertVisible(parent.postId, viewerId);
 
     const { cursor, limit } = query;
 
