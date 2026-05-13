@@ -63,6 +63,23 @@ export class PostsService {
     return this.toPostDto(post);
   }
 
+  // Lightweight visibility check for other modules (comments, future likes
+  // wire-up) that need "does this post exist and can this viewer see it?"
+  // without paying for the full PostDto SELECT + author join. Throws 404 for
+  // both missing and private-non-author — same no-enumeration semantics as
+  // findOne, just cheaper at scale.
+  async assertVisible(id: string, viewerId: string): Promise<void> {
+    const post = await this.prisma.db.post.findUnique({
+      where: { id },
+      select: { authorId: true, visibility: true },
+    });
+
+    if (!post) throw new NotFoundException('Post not found');
+    if (post.visibility === 'PRIVATE' && post.authorId !== viewerId) {
+      throw new NotFoundException('Post not found');
+    }
+  }
+
   // The visibility rule lives here, not in the controller, so every read path
   // applies it consistently (single endpoint today, embeds in other modules
   // tomorrow).

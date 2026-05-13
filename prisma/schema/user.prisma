@@ -28,6 +28,7 @@ model User {
     // Relations
     refreshTokens RefreshToken[]
     posts         Post[]
+    comments      Comment[]
 
     @@index([email, status])
     @@map("users")
