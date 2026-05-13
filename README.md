@@ -45,7 +45,7 @@ pnpm db:migrate
 pnpm start:dev
 ```
 
-The API will listen on `http://localhost:3000`.
+The API will listen on `http://localhost:8000`. (Port 8000 leaves `:3000` free for the Next.js frontend so both apps can run side by side without a clash.)
 
 Postgres is on `5434` (host) to avoid clashing with a default Postgres install. pgAdmin is on `http://localhost:5050` (login `admin@social-feed.local` / `admin`).
 
