@@ -20,12 +20,13 @@ export interface UploadedImage {
   mimetype: string;
 }
 
-// Per-row like state attached to a PostDto. Defaulted to 0 / false at the
-// mapper so callers can omit it for paths where likes are irrelevant
+// Per-row like state attached to a PostDto. Defaulted to 0 / false / [] at
+// the mapper so callers can omit it for paths where likes are irrelevant
 // (newly-created posts, etc.).
 interface LikeState {
   likeCount: number;
   hasLiked: boolean;
+  topLikers: PostDto['topLikers'];
 }
 
 // Shared selection shape: every read goes through this so the response shape
@@ -110,14 +111,20 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    // Two queries in parallel — like state is per-target, no batching benefit
-    // for a single resource read.
-    const [likeCount, hasLiked] = await Promise.all([
+    // Three queries in parallel — like state is per-target, no batching
+    // benefit for a single resource read. The top-likers query reuses the
+    // batched helper with an array of one (window function runs cleanly).
+    const [likeCount, hasLiked, topLikersMap] = await Promise.all([
       this.likes.countByTarget('POST', id),
       this.likes.hasUserLiked(viewerId, 'POST', id),
+      this.likes.getTopLikersForTargets('POST', [id], 3),
     ]);
 
-    return this.toPostDto(post, { likeCount, hasLiked });
+    return this.toPostDto(post, {
+      likeCount,
+      hasLiked,
+      topLikers: topLikersMap.get(id) ?? [],
+    });
   }
 
   async listFeed(viewerId: string, query: FeedQueryDto): Promise<FeedDto> {
@@ -144,18 +151,22 @@ export class PostsService {
     const hasMore = rows.length > limit;
     const sliced = hasMore ? rows.slice(0, -1) : rows;
 
-    // N+1 protection: batch both like-related lookups in parallel. Result is
-    // 2 extra queries total for the page, regardless of page size — not 2N.
+    // N+1 protection: batch all three like-related lookups in parallel.
+    // 3 extra queries total for the page, regardless of page size — not 3N.
+    // The top-likers query uses a single window-function pass to surface
+    // the social-proof stack the frontend renders next to the like count.
     const postIds = sliced.map((p) => p.id);
-    const [likeCounts, likedIds] = await Promise.all([
+    const [likeCounts, likedIds, topLikersMap] = await Promise.all([
       this.likes.getLikeCountsForTargets('POST', postIds),
       this.likes.getLikedTargetIdsForUser(viewerId, 'POST', postIds),
+      this.likes.getTopLikersForTargets('POST', postIds, 3),
     ]);
 
     const items = sliced.map((p) =>
       this.toPostDto(p, {
         likeCount: likeCounts.get(p.id) ?? 0,
         hasLiked: likedIds.has(p.id),
+        topLikers: topLikersMap.get(p.id) ?? [],
       }),
     );
 
@@ -203,12 +214,17 @@ export class PostsService {
 
     // Return final state including like state — the deletion doesn't remove
     // the likes row (FK is on userId, not on a polymorphic targetId).
-    const [likeCount, hasLiked] = await Promise.all([
+    const [likeCount, hasLiked, topLikersMap] = await Promise.all([
       this.likes.countByTarget('POST', id),
       this.likes.hasUserLiked(requesterId, 'POST', id),
+      this.likes.getTopLikersForTargets('POST', [id], 3),
     ]);
 
-    return this.toPostDto(updated, { likeCount, hasLiked });
+    return this.toPostDto(updated, {
+      likeCount,
+      hasLiked,
+      topLikers: topLikersMap.get(id) ?? [],
+    });
   }
 
   // ---------- internals ----------
@@ -220,7 +236,7 @@ export class PostsService {
 
   private toPostDto(
     post: Prisma.PostGetPayload<{ select: typeof POST_SELECT }>,
-    likeState: LikeState = { likeCount: 0, hasLiked: false },
+    likeState: LikeState = { likeCount: 0, hasLiked: false, topLikers: [] },
   ): PostDto {
     return {
       id: post.id,
@@ -231,6 +247,7 @@ export class PostsService {
       author: post.author,
       likeCount: likeState.likeCount,
       hasLiked: likeState.hasLiked,
+      topLikers: likeState.topLikers,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
     };

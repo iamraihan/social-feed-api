@@ -14,6 +14,11 @@ export class PostDto {
   // queries on detail reads. Always present; 0 / false when no likes exist.
   likeCount!: number;
   hasLiked!: boolean;
+  // Top 3 most recent likers, embedded so the feed renders the "who liked"
+  // stack without an N+1 follow-up call per post. Empty array when no one
+  // has liked yet. Populated by LikesService.getTopLikersForTargets via
+  // a single window-function query for the whole page.
+  topLikers!: PublicUserDto[];
   createdAt!: Date;
   updatedAt!: Date;
 }

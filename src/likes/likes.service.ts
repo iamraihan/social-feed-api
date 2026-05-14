@@ -6,7 +6,17 @@ import {
 import { LikeTargetType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLIC_USER_SELECT } from '../users/users.service';
+import { PublicUserDto } from '../users/dto';
 import { LikersListDto, ListLikersQueryDto } from './dto';
+
+// Shape the raw `json_agg` returns from getTopLikersForTargets. Same fields
+// as PublicUserDto — alias kept so service callers don't have to know the
+// query layer produces JSON.
+type PublicUserSnapshot = Pick<
+  PublicUserDto,
+  'id' | 'firstName' | 'lastName' | 'avatarKey'
+>;
+export type { PublicUserSnapshot };
 
 @Injectable()
 export class LikesService {
@@ -88,9 +98,57 @@ export class LikesService {
     return new Map(rows.map((r) => [r.targetId, r._count._all]));
   }
 
-  // Single query returning a Set of targetIds the user has liked. O(1) lookup
-  // at the call site. The composite (userId, targetType, targetId) unique
-  // index makes this an index-only scan.
+  // Single query returning a Map<targetId, PublicUser[]> with up to N most
+  // recent likers per target. Replaces the previous per-post lazy fetch the
+  // feed used to make (which was N+1 by call count). Built around a
+  // ROW_NUMBER() window so Postgres reads exactly `limit * targetIds.length`
+  // rows from the (target_type, target_id, created_at DESC) index, then
+  // joins each to its user — a single round-trip regardless of page size.
+  async getTopLikersForTargets(
+    targetType: LikeTargetType,
+    targetIds: string[],
+    limit = 3,
+  ): Promise<Map<string, PublicUserSnapshot[]>> {
+    if (targetIds.length === 0) return new Map();
+
+    type TopLikersRow = {
+      targetId: string;
+      users: PublicUserSnapshot[];
+    };
+
+    const rows = await this.prisma.db.$queryRaw<TopLikersRow[]>`
+      SELECT
+        ranked.target_id AS "targetId",
+        json_agg(
+          json_build_object(
+            'id',         u.id,
+            'firstName',  u.first_name,
+            'lastName',   u.last_name,
+            'avatarKey',  u.avatar_key
+          )
+          ORDER BY ranked.created_at DESC
+        ) AS users
+      FROM (
+        SELECT
+          l.target_id,
+          l.user_id,
+          l.created_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY l.target_id
+            ORDER BY l.created_at DESC
+          ) AS rn
+        FROM likes l
+        WHERE l.target_type = ${targetType}::"LikeTargetType"
+          AND l.target_id IN (${Prisma.join(targetIds)})
+      ) ranked
+      JOIN users u ON u.id = ranked.user_id
+      WHERE ranked.rn <= ${limit}
+      GROUP BY ranked.target_id
+    `;
+
+    return new Map(rows.map((r) => [r.targetId, r.users]));
+  }
+
   async getLikedTargetIdsForUser(
     userId: string,
     targetType: LikeTargetType,
