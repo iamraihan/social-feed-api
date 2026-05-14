@@ -1,4 +1,5 @@
 import { PostVisibility } from '@prisma/client';
+import { CommentSnapshot } from '../../comments/dto';
 import { PublicUserDto } from '../../users/dto';
 
 export class PostDto {
@@ -19,6 +20,17 @@ export class PostDto {
   // has liked yet. Populated by LikesService.getTopLikersForTargets via
   // a single window-function query for the whole page.
   topLikers!: PublicUserDto[];
+  // Top-level comments on the post (replies excluded). Soft-deleted comments
+  // are filtered via an explicit `where` on the `_count` relation — the
+  // soft-delete extension only hooks top-level reads, _count subqueries
+  // bypass it. Populated in the same SELECT as the post row, no extra query.
+  commentCount!: number;
+  // Most-recent top-level comment on this post, populated server-side so the
+  // feed can show a single preview comment per card without a follow-up
+  // fetch. Null when no top-level comments exist. Full list still requires
+  // GET /posts/:id/comments (paginated) — this is just the preview seed.
+  // Like state on the snapshot is computed for the viewer (hasLiked etc.).
+  previewComment!: CommentSnapshot | null;
   createdAt!: Date;
   updatedAt!: Date;
 }

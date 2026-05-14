@@ -5,10 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { CommentSnapshot } from '../comments/dto';
 import { LikesService } from '../likes/likes.service';
 import { ImageProcessor } from '../storage/image-processor.service';
 import { StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PublicUserDto } from '../users/dto';
 import { PUBLIC_USER_SELECT } from '../users/users.service';
 import { CreatePostDto, FeedDto, FeedQueryDto, PostDto } from './dto';
 
@@ -22,15 +24,34 @@ export interface UploadedImage {
 
 // Per-row like state attached to a PostDto. Defaulted to 0 / false / [] at
 // the mapper so callers can omit it for paths where likes are irrelevant
-// (newly-created posts, etc.).
+// (newly-created posts, etc.). `previewComment` defaults to null — fresh
+// posts have no comments yet.
 interface LikeState {
   likeCount: number;
   hasLiked: boolean;
   topLikers: PostDto['topLikers'];
+  previewComment: CommentSnapshot | null;
+}
+
+// Raw window-function row returned by getPreviewCommentsForPosts. JSON-encoded
+// author keeps the SQL to one round-trip — same pattern as the topLikers query.
+interface PreviewCommentRow {
+  postId: string;
+  id: string;
+  parentId: string | null;
+  content: string;
+  createdAt: Date;
+  updatedAt: Date;
+  author: PublicUserDto;
 }
 
 // Shared selection shape: every read goes through this so the response shape
 // stays consistent and the PublicUserDto contract is honored.
+//
+// `_count.comments` filters to top-level + ACTIVE: the relation count bypasses
+// the soft-delete extension (it hooks top-level reads only), and we don't
+// want replies inflating the per-post total — the design counts top-level
+// threads, not total messages.
 const POST_SELECT = {
   id: true,
   content: true,
@@ -41,6 +62,11 @@ const POST_SELECT = {
   createdAt: true,
   updatedAt: true,
   author: { select: PUBLIC_USER_SELECT },
+  _count: {
+    select: {
+      comments: { where: { parentId: null, status: 'ACTIVE' } },
+    },
+  },
 } satisfies Prisma.PostSelect;
 
 @Injectable()
@@ -111,19 +137,22 @@ export class PostsService {
       throw new NotFoundException('Post not found');
     }
 
-    // Three queries in parallel — like state is per-target, no batching
-    // benefit for a single resource read. The top-likers query reuses the
-    // batched helper with an array of one (window function runs cleanly).
-    const [likeCount, hasLiked, topLikersMap] = await Promise.all([
+    // Four queries in parallel — like state is per-target, no batching
+    // benefit for a single resource read. The top-likers + preview-comment
+    // queries reuse the batched helpers with an array of one (window
+    // function runs cleanly on a single id).
+    const [likeCount, hasLiked, topLikersMap, previewMap] = await Promise.all([
       this.likes.countByTarget('POST', id),
       this.likes.hasUserLiked(viewerId, 'POST', id),
       this.likes.getTopLikersForTargets('POST', [id], 3),
+      this.getPreviewCommentsForPosts([id], viewerId),
     ]);
 
     return this.toPostDto(post, {
       likeCount,
       hasLiked,
       topLikers: topLikersMap.get(id) ?? [],
+      previewComment: previewMap.get(id) ?? null,
     });
   }
 
@@ -151,15 +180,16 @@ export class PostsService {
     const hasMore = rows.length > limit;
     const sliced = hasMore ? rows.slice(0, -1) : rows;
 
-    // N+1 protection: batch all three like-related lookups in parallel.
-    // 3 extra queries total for the page, regardless of page size — not 3N.
-    // The top-likers query uses a single window-function pass to surface
-    // the social-proof stack the frontend renders next to the like count.
+    // N+1 protection: batch every per-post lookup in parallel. 4 extra
+    // queries total for the page regardless of page size — not 4N. The
+    // top-likers + preview-comment queries each use a single window-function
+    // pass so a 50-post page still only fires one row per query.
     const postIds = sliced.map((p) => p.id);
-    const [likeCounts, likedIds, topLikersMap] = await Promise.all([
+    const [likeCounts, likedIds, topLikersMap, previewMap] = await Promise.all([
       this.likes.getLikeCountsForTargets('POST', postIds),
       this.likes.getLikedTargetIdsForUser(viewerId, 'POST', postIds),
       this.likes.getTopLikersForTargets('POST', postIds, 3),
+      this.getPreviewCommentsForPosts(postIds, viewerId),
     ]);
 
     const items = sliced.map((p) =>
@@ -167,6 +197,7 @@ export class PostsService {
         likeCount: likeCounts.get(p.id) ?? 0,
         hasLiked: likedIds.has(p.id),
         topLikers: topLikersMap.get(p.id) ?? [],
+        previewComment: previewMap.get(p.id) ?? null,
       }),
     );
 
@@ -214,16 +245,18 @@ export class PostsService {
 
     // Return final state including like state — the deletion doesn't remove
     // the likes row (FK is on userId, not on a polymorphic targetId).
-    const [likeCount, hasLiked, topLikersMap] = await Promise.all([
+    const [likeCount, hasLiked, topLikersMap, previewMap] = await Promise.all([
       this.likes.countByTarget('POST', id),
       this.likes.hasUserLiked(requesterId, 'POST', id),
       this.likes.getTopLikersForTargets('POST', [id], 3),
+      this.getPreviewCommentsForPosts([id], requesterId),
     ]);
 
     return this.toPostDto(updated, {
       likeCount,
       hasLiked,
       topLikers: topLikersMap.get(id) ?? [],
+      previewComment: previewMap.get(id) ?? null,
     });
   }
 
@@ -234,9 +267,120 @@ export class PostsService {
     return this.storage.save(processed, { prefix: 'posts', ext: 'webp' });
   }
 
+  // Single round-trip that fetches the most-recent top-level comment per post
+  // PLUS that comment's likeCount / hasLiked / replyCount, batched across the
+  // whole feed page. Lives here (not in CommentsService) because PostsService
+  // is already the consumer and CommentsService → PostsService is an existing
+  // edge — adding the reverse would create a Nest module cycle.
+  //
+  // Query plan: ROW_NUMBER() PARTITION BY post_id ORDER BY created_at DESC
+  // picks one comment per post; the lateral subqueries inline a count of
+  // comment likes and a 0/1 flag for the viewer's like on that comment, so
+  // the JSON returns a fully-populated CommentDto. Reply counts are filled
+  // by a separate grouped query (cheaper than another lateral).
+  private async getPreviewCommentsForPosts(
+    postIds: string[],
+    viewerId: string,
+    limit = 1,
+  ): Promise<Map<string, CommentSnapshot>> {
+    if (postIds.length === 0) return new Map();
+
+    const rows = await this.prisma.db.$queryRaw<PreviewCommentRow[]>`
+      SELECT
+        ranked.post_id AS "postId",
+        ranked.id,
+        ranked.parent_id AS "parentId",
+        ranked.content,
+        ranked.created_at AS "createdAt",
+        ranked.updated_at AS "updatedAt",
+        json_build_object(
+          'id',         u.id,
+          'firstName',  u.first_name,
+          'lastName',   u.last_name,
+          'avatarKey',  u.avatar_key
+        ) AS author
+      FROM (
+        SELECT
+          c.id,
+          c.post_id,
+          c.parent_id,
+          c.content,
+          c.author_id,
+          c.created_at,
+          c.updated_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY c.post_id
+            ORDER BY c.created_at DESC
+          ) AS rn
+        FROM comments c
+        WHERE c.post_id IN (${Prisma.join(postIds)})
+          AND c.parent_id IS NULL
+          AND c.status = 'ACTIVE'::"CommentStatus"
+      ) ranked
+      JOIN users u ON u.id = ranked.author_id
+      WHERE ranked.rn <= ${limit}
+    `;
+
+    if (rows.length === 0) return new Map();
+
+    const commentIds = rows.map((r) => r.id);
+    // Batched: like state + reply count for the preview comments only.
+    const [likeCounts, likedIds, replyCounts] = await Promise.all([
+      this.likes.getLikeCountsForTargets('COMMENT', commentIds),
+      this.likes.getLikedTargetIdsForUser(viewerId, 'COMMENT', commentIds),
+      this.getReplyCountsForComments(commentIds),
+    ]);
+
+    return new Map(
+      rows.map((r) => [
+        r.postId,
+        {
+          id: r.id,
+          postId: r.postId,
+          parentId: r.parentId,
+          content: r.content,
+          author: r.author,
+          replyCount: replyCounts.get(r.id) ?? 0,
+          likeCount: likeCounts.get(r.id) ?? 0,
+          hasLiked: likedIds.has(r.id),
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+        },
+      ]),
+    );
+  }
+
+  // Batched reply count by parent comment id. Single GROUP BY query → O(1)
+  // lookup at the call site. Filters to ACTIVE to mirror the soft-delete
+  // semantics the relation `_count` filter applies elsewhere.
+  private async getReplyCountsForComments(
+    commentIds: string[],
+  ): Promise<Map<string, number>> {
+    if (commentIds.length === 0) return new Map();
+
+    const rows = await this.prisma.db.comment.groupBy({
+      by: ['parentId'],
+      where: { parentId: { in: commentIds }, status: 'ACTIVE' },
+      _count: { _all: true },
+    });
+
+    return new Map(
+      rows
+        .filter(
+          (r): r is typeof r & { parentId: string } => r.parentId !== null,
+        )
+        .map((r) => [r.parentId, r._count._all]),
+    );
+  }
+
   private toPostDto(
     post: Prisma.PostGetPayload<{ select: typeof POST_SELECT }>,
-    likeState: LikeState = { likeCount: 0, hasLiked: false, topLikers: [] },
+    likeState: LikeState = {
+      likeCount: 0,
+      hasLiked: false,
+      topLikers: [],
+      previewComment: null,
+    },
   ): PostDto {
     return {
       id: post.id,
@@ -248,6 +392,8 @@ export class PostsService {
       likeCount: likeState.likeCount,
       hasLiked: likeState.hasLiked,
       topLikers: likeState.topLikers,
+      commentCount: post._count.comments,
+      previewComment: likeState.previewComment,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
     };

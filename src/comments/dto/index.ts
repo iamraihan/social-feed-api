@@ -4,4 +4,5 @@ export {
   CommentDto,
   CommentListDto,
   CommentListMeta,
+  type CommentSnapshot,
 } from './comment-response.dto';

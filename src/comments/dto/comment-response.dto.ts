@@ -19,6 +19,14 @@ export class CommentDto {
   updatedAt!: Date;
 }
 
+// Same shape as CommentDto but plain-typed (no class) — used by PostsService
+// to attach a preview comment to each PostDto without importing the class
+// constructor (which would require either a circular dep or a transformer).
+export type CommentSnapshot = Omit<CommentDto, 'createdAt' | 'updatedAt'> & {
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 // Service-level return shape for paginated comment lists. Recognized by
 // ResponseInterceptor and surfaced at the envelope's top level.
 export class CommentListMeta {
