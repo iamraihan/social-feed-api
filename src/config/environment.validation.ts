@@ -210,9 +210,7 @@ export function validateEnvironment(config: Record<string, unknown>) {
     }
   } else if (storageDriver === 'local') {
     if (!validated.UPLOAD_DIR) {
-      storageIssues.push(
-        'UPLOAD_DIR is required when STORAGE_DRIVER=local',
-      );
+      storageIssues.push('UPLOAD_DIR is required when STORAGE_DRIVER=local');
     }
     if (!validated.PUBLIC_BASE_URL) {
       storageIssues.push(
