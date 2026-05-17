@@ -49,6 +49,12 @@ lerna-debug.log*
 # Prisma
 prisma/node_modules/
 
+# Lockfile hygiene — this project uses pnpm exclusively. A stray
+# `npm install` will write package-lock.json; ignore it so the two
+# lockfiles never disagree and CI/Render don't pick the wrong one.
+package-lock.json
+yarn.lock
+
 # User-uploaded content (runtime data, not source)
 /uploads
 

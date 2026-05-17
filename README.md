@@ -262,43 +262,48 @@ prisma/schema/
 
 ---
 
-## Deployment (Heroku)
+## Deployment (Render)
 
-The app ships with a `Procfile` and is ready to deploy to Heroku.
+A `render.yaml` blueprint at the repo root provisions Postgres, Redis, and the API in one apply. The blueprint also wires the three together — `DATABASE_URL`, `POSTGRES_*`, and `REDIS_*` are injected automatically from the managed services; you don't paste connection strings by hand.
 
 ```bash
-# 1. Install Heroku CLI and log in
-heroku login
+# 1. Push the branch to GitHub
+git push origin main
 
-# 2. Add Heroku remote (app name: social-feed-api)
-heroku git:remote -a social-feed-api
+# 2. In the Render dashboard: New → Blueprint → connect this repo
+#    Render reads render.yaml and creates all three services.
 
-# 3. Add PostgreSQL addon
-heroku addons:create heroku-postgresql:hobby-dev
+# 3. Open the social-feed-api service → Environment → set the secrets that
+#    render.yaml marked `sync: false`:
+#      - CORS_ORIGIN              (your frontend origin, e.g. https://app.example.com)
+#      - CLOUDINARY_CLOUD_NAME
+#      - CLOUDINARY_API_KEY
+#      - CLOUDINARY_API_SECRET
+#    (JWT_ACCESS_SECRET is generated automatically — leave alone.)
 
-# 4. Set required environment variables
-heroku config:set NODE_ENV=production
-heroku config:set JWT_ACCESS_SECRET=$(openssl rand -hex 64)
-heroku config:set CORS_ORIGIN=https://your-frontend-domain.com
-heroku config:set COOKIE_SECURE=true
-heroku config:set PUBLIC_BASE_URL=https://social-feed-api.herokuapp.com
-
-# Cloudinary (image storage)
-heroku config:set CLOUDINARY_CLOUD_NAME=your_cloud_name
-heroku config:set CLOUDINARY_API_KEY=your_api_key
-heroku config:set CLOUDINARY_API_SECRET=your_api_secret
-heroku config:set CLOUDINARY_FOLDER=social-feed
-
-# DATABASE_URL is set automatically by the Postgres addon
-
-# 5. Deploy
-git push heroku main
-
-# 6. Run migrations
-heroku run npx prisma migrate deploy
+# 4. Trigger a manual deploy from the dashboard (or push another commit).
+#    Build command runs:
+#      pnpm install --frozen-lockfile
+#      pnpm exec prisma generate
+#      pnpm build
+#      pnpm exec prisma migrate deploy
 ```
 
-> **Note:** Redis is required for the access-token blocklist (`/auth/logout-all`). Add a Redis addon (e.g. Heroku Data for Redis) and set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` config vars accordingly.
+### Why pnpm works out of the box
+
+`pnpm-lock.yaml` is committed and `engines.pnpm` is declared in `package.json` — Render's Node runtime detects pnpm without any extra buildpack config.
+
+### Free-tier gotchas
+
+| Service | Quirk |
+|---|---|
+| Web | Sleeps after 15min idle. First request after sleep = ~30s cold start. |
+| Postgres | Free instance is **deleted after 90 days**. Upgrade to a paid plan before that window if you need persistence. |
+| Redis | 25MB cap. Fine for the access-token blocklist — entries are tiny and TTL'd. |
+
+### Migrations on each deploy
+
+`prisma migrate deploy` runs at the end of every build. Safe by design: it applies pending migrations only, never drops data, and is the supported production command (unlike `migrate dev` which can reset the schema).
 
 ---
 

@@ -1,0 +1,95 @@
+# Render Blueprint — provisions Postgres, Redis, and the API in one shot.
+# Dashboard: New → Blueprint → point at this repo. Render reads this file and
+# wires the services together via the `fromDatabase` / `fromService` refs.
+#
+# Notes:
+#   - `pnpm-lock.yaml` + `engines.pnpm` in package.json let Render pick pnpm
+#     automatically — no buildpack config needed.
+#   - `migrate deploy` (not `migrate dev`) is the only safe migration command
+#     in production: it applies pending migrations and never drops data.
+#   - Secrets marked `sync: false` MUST be set manually in the dashboard
+#     after the blueprint runs (CORS_ORIGIN, CLOUDINARY_*).
+
+databases:
+  - name: social-feed-postgres
+    plan: free
+    postgresMajorVersion: 16
+
+services:
+  - type: redis
+    name: social-feed-redis
+    plan: free
+    # Empty allow-list = reachable only from the private Render network, never
+    # the public internet. The web service connects via the injected host.
+    ipAllowList: []
+
+  - type: web
+    name: social-feed-api
+    runtime: node
+    plan: free
+    healthCheckPath: /
+    buildCommand: pnpm install --frozen-lockfile && pnpm exec prisma generate && pnpm build && pnpm exec prisma migrate deploy
+    startCommand: node dist/main.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8000
+
+      # ---- Postgres (auto-wired from the database above) ----
+      - key: DATABASE_URL
+        fromDatabase:
+          name: social-feed-postgres
+          property: connectionString
+      - key: POSTGRES_HOST
+        fromDatabase: { name: social-feed-postgres, property: host }
+      - key: POSTGRES_PORT
+        fromDatabase: { name: social-feed-postgres, property: port }
+      - key: POSTGRES_USER
+        fromDatabase: { name: social-feed-postgres, property: user }
+      - key: POSTGRES_PASSWORD
+        fromDatabase: { name: social-feed-postgres, property: password }
+      - key: POSTGRES_DB
+        fromDatabase: { name: social-feed-postgres, property: database }
+
+      # ---- Redis (auto-wired from the redis service above) ----
+      - key: REDIS_HOST
+        fromService: { type: redis, name: social-feed-redis, property: host }
+      - key: REDIS_PORT
+        fromService: { type: redis, name: social-feed-redis, property: port }
+      - key: REDIS_PASSWORD
+        fromService: { type: redis, name: social-feed-redis, property: password }
+
+      # ---- JWT / Auth ----
+      # Render generates a strong random value once at blueprint apply time
+      # and persists it — rotating later requires manual dashboard edit.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_TTL_SECONDS
+        value: 900
+      - key: REFRESH_TOKEN_TTL_DAYS
+        value: 7
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: TRUSTED_PROXY_HOPS
+        value: 1
+
+      # ---- CORS (frontend origin — set manually after deploying the SPA) ----
+      - key: CORS_ORIGIN
+        sync: false
+
+      # ---- Storage ----
+      - key: STORAGE_DRIVER
+        value: cloudinary
+      - key: MAX_IMAGE_SIZE_MB
+        value: 5
+
+      # ---- Cloudinary (secrets — set manually in dashboard) ----
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: social-feed
