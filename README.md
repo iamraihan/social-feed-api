@@ -18,6 +18,7 @@ The task spec lives in `Assets/Selection Task for Full Stack Engineer at Appifyl
 | Cache / blocklist | Redis (ioredis) |
 | Auth | JWT (HS256) + refresh-token rotation with family-based reuse detection |
 | Image processing | sharp (resize, EXIF strip, WebP) |
+| Image storage | Cloudinary (CDN-delivered) |
 | Validation | class-validator + class-transformer |
 | Rate limiting | `@nestjs/throttler` |
 | Scheduling | `@nestjs/schedule` (nightly token cleanup) |
@@ -33,7 +34,9 @@ pnpm install
 
 # 2. Copy env template
 cp .env.example .env
-# (defaults work out of the box for local dev)
+# (defaults work out of the box for local dev — except Cloudinary; see below)
+
+# 2a. Fill in Cloudinary credentials in .env (see "Cloudinary setup" section)
 
 # 3. Bring up Postgres, Redis, pgAdmin
 docker compose up -d
@@ -73,6 +76,31 @@ See `.env.example` for the full list with comments. The validator at boot (`src/
 - `DATABASE_URL` is validated as a real PostgreSQL URL.
 
 This is the single highest-leverage safety check in the codebase. Misconfigured prod deploys die at boot, not at first request.
+
+---
+
+## Cloudinary setup
+
+Image bytes live on Cloudinary; the DB stores only the `public_id`. Cloudinary's CDN delivers them, and `f_auto,q_auto` URL transforms serve AVIF/WebP per-client without us pre-encoding variants.
+
+**Get credentials** (free tier is plenty for this app):
+
+1. Sign up at [cloudinary.com](https://cloudinary.com) (free, no card).
+2. From the **Dashboard**, copy **Cloud Name**, **API Key**, **API Secret**.
+3. Paste into `.env`:
+
+   ```env
+   CLOUDINARY_CLOUD_NAME=your_cloud_name
+   CLOUDINARY_API_KEY=your_api_key
+   CLOUDINARY_API_SECRET=your_api_secret
+   CLOUDINARY_FOLDER=social-feed   # optional namespace inside the account
+   ```
+
+The env validator refuses to boot if `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` are missing.
+
+**Switching back to local disk for offline dev:** set `STORAGE_DRIVER=local` in `.env`. The `StorageModule` factory picks the impl at boot — no code edit, no rebuild. Unknown values fail boot loudly rather than silently misroute uploads. Both impls share the same abstract `StorageService` DI token, so consumers (e.g. `PostsService`) don't care which is active.
+
+> **Migration note:** existing DB rows with local keys like `posts/<uuid>.webp` will not resolve against Cloudinary. Wipe `posts.image_key` on switchover, or run a script that re-uploads the local files and rewrites the keys.
 
 ---
 
@@ -146,12 +174,14 @@ Every response, success or error, has the same outer shape:
 
 Error codes are semantic strings (`CONFLICT`, `NOT_FOUND`, `VALIDATION_FAILED`, ...) — clients branch on the code rather than HTTP status numbers. Prisma codes (`P2002`, `P2025`, ...) are mapped at the filter layer; they never leak to the client.
 
-### Image upload — local disk + sharp
-Multer with `memoryStorage`, sharp pipeline (`.rotate().resize().webp()`), then `LocalStorageService.save()` writes to `./uploads/posts/<uuid>.webp`. Files are served by Express static middleware at `/uploads/*`.
+### Image upload — Cloudinary + sharp
+Multer with `memoryStorage`, sharp pipeline (`.rotate().resize().webp()`), then `CloudinaryStorageService.save()` streams the buffer to Cloudinary via `upload_stream`. The DB stores the returned `public_id` (e.g. `social-feed/posts/<uuid>`). Delivery URLs are built with `cloudinary.url(key, { secure, fetch_format: 'auto', quality: 'auto' })` so the CDN serves AVIF/WebP per-client without us pre-encoding variants.
 
-`StorageService` is an abstract class — swapping to S3 / MinIO is a one-class change with no consumer-side modifications. For a hiring task that ships via docker-compose I chose local disk over MinIO so `docker compose up` works first try without bucket initialization rituals.
+Why pre-process with sharp *and* hand off to Cloudinary: the sharp pass strips EXIF (GPS/device leak) and rejects pixel bombs (>50M pixels) **before** any bytes leave our process. It also gates Cloudinary bandwidth — we upload 1080px WebP@85, not the user's raw 12MB phone photo.
 
-Static file serving deliberately doesn't auth-check image URLs. Post visibility hides the post body, but the image URL (random UUID) is treated as public-by-obscurity — same as Twitter / Instagram / Facebook. If stricter image privacy were required, the right move is signed URLs with TTL or a guarded `GET /posts/:id/image` streaming route.
+`StorageService` is an abstract class — `LocalStorageService` (disk) and `CloudinaryStorageService` are interchangeable via the `useClass` in `StorageModule`. Swapping to S3 / MinIO is a third one-class addition.
+
+Image URLs deliberately aren't auth-checked. Post visibility hides the post body, but the image URL (random-UUID `public_id`) is treated as public-by-obscurity — same as Twitter / Instagram / Facebook. If stricter image privacy were required, Cloudinary's signed-delivery URLs with TTL are the right move; the URL builder already runs through a single chokepoint (`StorageService.url`) so the change is one method.
 
 ### Polymorphic likes — no FK on the target
 Likes can attach to posts, comments, or replies. Rather than three tables, one `likes` table with `target_type` + `target_id` covers all three. No DB-level FK on `target_id` (the type discriminator decides which parent table it points to) — existence is verified at the service layer before every write.
@@ -214,10 +244,11 @@ src/
 ├── comments/                      # service + controller + DTOs (parent_id self-FK)
 ├── likes/                         # polymorphic likes + batched read methods
 └── storage/
-    ├── storage.module.ts          # @Global
-    ├── storage.service.ts         # abstract class (DI token; S3 swap point)
-    ├── local-storage.service.ts   # current impl
-    └── image-processor.service.ts # sharp presets (forPost, future forAvatar)
+    ├── storage.module.ts             # @Global; chooses the active impl
+    ├── storage.service.ts            # abstract class (DI token; S3 swap point)
+    ├── cloudinary-storage.service.ts # active impl — Cloudinary CDN
+    ├── local-storage.service.ts      # fallback impl — disk (offline dev)
+    └── image-processor.service.ts    # sharp presets (forPost, future forAvatar)
 
 prisma/schema/
 ├── schema.prisma                  # generator + datasource
@@ -251,6 +282,12 @@ heroku config:set JWT_ACCESS_SECRET=$(openssl rand -hex 64)
 heroku config:set CORS_ORIGIN=https://your-frontend-domain.com
 heroku config:set COOKIE_SECURE=true
 heroku config:set PUBLIC_BASE_URL=https://social-feed-api.herokuapp.com
+
+# Cloudinary (image storage)
+heroku config:set CLOUDINARY_CLOUD_NAME=your_cloud_name
+heroku config:set CLOUDINARY_API_KEY=your_api_key
+heroku config:set CLOUDINARY_API_SECRET=your_api_secret
+heroku config:set CLOUDINARY_FOLDER=social-feed
 
 # DATABASE_URL is set automatically by the Postgres addon
 
@@ -287,7 +324,7 @@ The following are real production concerns but were deferred against the scope:
 - Structured JSON logs (currently the Nest default Logger)
 - Per-user throttle keys instead of per-IP
 - Throttler Redis-backed storage for multi-instance scale (currently in-memory)
-- S3 / CDN for image storage (local disk via the `StorageService` abstraction, swap path documented above)
+- S3 / MinIO as an alternative to Cloudinary (one-class addition via the `StorageService` abstraction)
 
 Each of these has a clear next step in the codebase if/when needed — most are one-class or one-config changes thanks to the abstractions in place.
 

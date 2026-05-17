@@ -122,18 +122,49 @@ class EnvironmentVariables {
   @IsOptional()
   CORS_ORIGIN?: string;
 
-  // ---- Storage (local disk; swap to S3 / MinIO in prod) ----
+  // ---- Storage ----
+  // Image bytes live on Cloudinary (default); only the public_id is persisted
+  // in our DB. STORAGE_DRIVER toggles the active impl at boot:
+  //   - "cloudinary" (default) — needs the CLOUDINARY_* vars below
+  //   - "local"                — needs UPLOAD_DIR + PUBLIC_BASE_URL
+  // An unknown value boot-fails in StorageModule's factory.
+  @IsIn(['cloudinary', 'local'])
+  @IsOptional()
+  STORAGE_DRIVER?: 'cloudinary' | 'local';
+
   @IsString()
-  @IsNotEmpty()
-  UPLOAD_DIR!: string;
+  @IsOptional()
+  UPLOAD_DIR?: string;
 
   @IsUrl({ require_tld: false, require_protocol: true })
-  PUBLIC_BASE_URL!: string;
+  @IsOptional()
+  PUBLIC_BASE_URL?: string;
 
   @IsNumber()
   @Min(1)
   @Max(50)
   MAX_IMAGE_SIZE_MB!: number;
+
+  // ---- Cloudinary ----
+  // Optional at the schema layer — required-ness is conditional on
+  // STORAGE_DRIVER and enforced by the cross-field block in
+  // validateEnvironment() below. Schema-level @IsNotEmpty would force devs to
+  // supply fake creds even when STORAGE_DRIVER=local, defeating the fallback.
+  @IsString()
+  @IsOptional()
+  CLOUDINARY_CLOUD_NAME?: string;
+
+  @IsString()
+  @IsOptional()
+  CLOUDINARY_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  CLOUDINARY_API_SECRET?: string;
+
+  @IsString()
+  @IsOptional()
+  CLOUDINARY_FOLDER?: string;
 }
 
 export function validateEnvironment(config: Record<string, unknown>) {
@@ -148,6 +179,47 @@ export function validateEnvironment(config: Record<string, unknown>) {
       .map((e) => Object.values(e.constraints ?? {}).join(', '))
       .join('\n  - ');
     throw new Error(`Environment validation failed:\n  - ${messages}`);
+  }
+
+  // Cross-field storage check — enforce only the env vars the *active* driver
+  // actually needs. Schema-level required-on-all would force devs to supply
+  // fake Cloudinary creds when running the local-disk fallback, and vice
+  // versa. Boot-fails here with a clear message rather than late inside
+  // CloudinaryStorageService / LocalStorageService constructors.
+  const storageDriver = validated.STORAGE_DRIVER ?? 'cloudinary';
+  const storageIssues: string[] = [];
+  if (storageDriver === 'cloudinary') {
+    if (!validated.CLOUDINARY_CLOUD_NAME) {
+      storageIssues.push(
+        'CLOUDINARY_CLOUD_NAME is required when STORAGE_DRIVER=cloudinary',
+      );
+    }
+    if (!validated.CLOUDINARY_API_KEY) {
+      storageIssues.push(
+        'CLOUDINARY_API_KEY is required when STORAGE_DRIVER=cloudinary',
+      );
+    }
+    if (!validated.CLOUDINARY_API_SECRET) {
+      storageIssues.push(
+        'CLOUDINARY_API_SECRET is required when STORAGE_DRIVER=cloudinary',
+      );
+    }
+  } else if (storageDriver === 'local') {
+    if (!validated.UPLOAD_DIR) {
+      storageIssues.push(
+        'UPLOAD_DIR is required when STORAGE_DRIVER=local',
+      );
+    }
+    if (!validated.PUBLIC_BASE_URL) {
+      storageIssues.push(
+        'PUBLIC_BASE_URL is required when STORAGE_DRIVER=local',
+      );
+    }
+  }
+  if (storageIssues.length > 0) {
+    throw new Error(
+      `Environment validation failed:\n  - ${storageIssues.join('\n  - ')}`,
+    );
   }
 
   // Cross-field production safety checks. These are silent footguns if missed:

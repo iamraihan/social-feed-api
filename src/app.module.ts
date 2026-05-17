@@ -9,6 +9,7 @@ import { AuthModule } from './auth/auth.module';
 import { CommentsModule } from './comments/comments.module';
 import {
   authConfig,
+  cloudinaryConfig,
   databaseConfig,
   redisConfig,
   storageConfig,
@@ -24,7 +25,13 @@ import { UsersModule } from './users/users.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [databaseConfig, authConfig, redisConfig, storageConfig],
+      load: [
+        databaseConfig,
+        authConfig,
+        redisConfig,
+        storageConfig,
+        cloudinaryConfig,
+      ],
       envFilePath: '.env',
       validate: validateEnvironment,
     }),
