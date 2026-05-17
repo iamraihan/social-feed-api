@@ -28,7 +28,13 @@ services:
     runtime: node
     plan: free
     healthCheckPath: /
-    buildCommand: pnpm install --frozen-lockfile && pnpm exec prisma generate && pnpm build && pnpm exec prisma migrate deploy
+    # corepack enables pnpm regardless of whether Render's auto-detect picks it
+    # up. Migrations run in `preDeployCommand`, not in build, because the DB
+    # env vars are only guaranteed to be wired in the deploy phase, not the
+    # build phase. preDeployCommand also runs *after* build succeeds, so a
+    # failing migration leaves the previous green deploy serving traffic.
+    buildCommand: corepack enable && corepack prepare pnpm@9 --activate && pnpm install --frozen-lockfile && pnpm exec prisma generate && pnpm build
+    preDeployCommand: pnpm exec prisma migrate deploy
     startCommand: node dist/main.js
     envVars:
       - key: NODE_ENV
