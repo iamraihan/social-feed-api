@@ -111,9 +111,13 @@ class EnvironmentVariables {
   @Max(65535)
   REDIS_PORT!: number;
 
+  // Optional: managed Redis offerings (e.g. Render's free instance on the
+  // private network) don't require a password. Local docker-compose Redis
+  // still sets one — the consumer in RedisModule reads via .get() so
+  // undefined is passed through to ioredis correctly.
   @IsString()
-  @IsNotEmpty()
-  REDIS_PASSWORD!: string;
+  @IsOptional()
+  REDIS_PASSWORD?: string;
 
   // ---- CORS ----
   // Comma-separated list of allowed origins for credentialed requests.

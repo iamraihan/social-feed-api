@@ -13,7 +13,7 @@
 databases:
   - name: social-feed-postgres
     plan: free
-    postgresMajorVersion: 16
+    postgresMajorVersion: "16"
 
 services:
   - type: redis
@@ -53,12 +53,15 @@ services:
         fromDatabase: { name: social-feed-postgres, property: database }
 
       # ---- Redis (auto-wired from the redis service above) ----
+      # Render's managed Redis exposes only host/port/connectionString — no
+      # password property. With `ipAllowList: []` the instance is reachable
+      # only from Render's private network, so unauthenticated access over
+      # the private interface is the supported pattern. REDIS_PASSWORD is
+      # therefore omitted here and the env validator treats it as optional.
       - key: REDIS_HOST
         fromService: { type: redis, name: social-feed-redis, property: host }
       - key: REDIS_PORT
         fromService: { type: redis, name: social-feed-redis, property: port }
-      - key: REDIS_PASSWORD
-        fromService: { type: redis, name: social-feed-redis, property: password }
 
       # ---- JWT / Auth ----
       # Render generates a strong random value once at blueprint apply time
