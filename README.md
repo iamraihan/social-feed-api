@@ -231,6 +231,40 @@ prisma/schema/
 
 ---
 
+## Deployment (Heroku)
+
+The app ships with a `Procfile` and is ready to deploy to Heroku.
+
+```bash
+# 1. Install Heroku CLI and log in
+heroku login
+
+# 2. Add Heroku remote (app name: social-feed-api)
+heroku git:remote -a social-feed-api
+
+# 3. Add PostgreSQL addon
+heroku addons:create heroku-postgresql:hobby-dev
+
+# 4. Set required environment variables
+heroku config:set NODE_ENV=production
+heroku config:set JWT_ACCESS_SECRET=$(openssl rand -hex 64)
+heroku config:set CORS_ORIGIN=https://your-frontend-domain.com
+heroku config:set COOKIE_SECURE=true
+heroku config:set PUBLIC_BASE_URL=https://social-feed-api.herokuapp.com
+
+# DATABASE_URL is set automatically by the Postgres addon
+
+# 5. Deploy
+git push heroku main
+
+# 6. Run migrations
+heroku run npx prisma migrate deploy
+```
+
+> **Note:** Redis is required for the access-token blocklist (`/auth/logout-all`). Add a Redis addon (e.g. Heroku Data for Redis) and set `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` config vars accordingly.
+
+---
+
 ## What's intentionally out of scope
 
 The provided HTML design shows features the PDF brief explicitly defers ("you may ignore most of the design elements — focus only on the main functionality of the feed"). The following weren't built:
