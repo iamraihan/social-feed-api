@@ -10,6 +10,11 @@ import { SaveOptions, StorageService } from './storage.service';
 
 @Injectable()
 export class CloudinaryStorageService extends StorageService {
+  // 30s ceiling on a single upload. A wedged Cloudinary edge would otherwise
+  // pin the multer-held buffer in memory until Node's default socket timeout
+  // (~2 min) — usable as a DoS surface on a /posts spam.
+  private readonly UPLOAD_TIMEOUT_MS = 30_000;
+
   private readonly folder: string;
 
   constructor(configService: ConfigService) {
@@ -22,11 +27,6 @@ export class CloudinaryStorageService extends StorageService {
     });
     this.folder = configService.getOrThrow<string>('cloudinary.folder');
   }
-
-  // 30s ceiling on a single upload. A wedged Cloudinary edge would otherwise
-  // pin the multer-held buffer in memory until Node's default socket timeout
-  // (~2 min) — usable as a DoS surface on a /posts spam.
-  private readonly UPLOAD_TIMEOUT_MS = 30_000;
 
   // Returned key is the Cloudinary public_id (e.g. "social-feed/posts/<uuid>").
   // No file extension — Cloudinary derives format from upload bytes and the
