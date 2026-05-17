@@ -46,7 +46,13 @@ export class CloudinaryStorageService extends StorageService {
           result: UploadApiResponse | undefined,
         ) => {
           if (error || !result) {
-            return reject(error ?? new Error('Cloudinary upload failed'));
+            // Cloudinary passes plain objects (UploadApiErrorResponse), not
+            // Error instances. Wrapping preserves the message + http_code in
+            // logs and routes the failure into the filter's Error branch.
+            const wrapped = new Error(
+              `Cloudinary upload failed: ${error?.message ?? 'unknown error'} (http=${error?.http_code ?? 'n/a'}, key=${publicId})`,
+            );
+            return reject(wrapped);
           }
           resolve(result.public_id);
         },

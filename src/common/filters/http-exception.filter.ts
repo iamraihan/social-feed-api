@@ -46,8 +46,21 @@ export class HttpExceptionFilter implements ExceptionFilter {
         exception.stack,
       );
     } else {
+      // `String(exception)` collapses plain objects to "[object Object]" and
+      // loses everything. Try a structured JSON serialization first so SDKs
+      // that reject with bare objects (Cloudinary's UploadApiErrorResponse,
+      // some HTTP clients) surface their real payload in the log.
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(
+          exception,
+          Object.getOwnPropertyNames(exception ?? {}),
+        );
+      } catch {
+        serialized = String(exception);
+      }
       this.logger.error(
-        `Unhandled non-Error exception on ${route}: ${String(exception)}`,
+        `Unhandled non-Error exception on ${route}: ${serialized}`,
       );
     }
 
