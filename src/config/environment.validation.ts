@@ -123,9 +123,15 @@ class EnvironmentVariables {
   CORS_ORIGIN?: string;
 
   // ---- Storage ----
-  // Image bytes live on Cloudinary; only the public_id is persisted in our DB.
-  // UPLOAD_DIR / PUBLIC_BASE_URL kept optional so LocalStorageService remains
-  // a drop-in fallback for offline dev (swap useClass in StorageModule).
+  // Image bytes live on Cloudinary (default); only the public_id is persisted
+  // in our DB. STORAGE_DRIVER toggles the active impl at boot:
+  //   - "cloudinary" (default) — needs the CLOUDINARY_* vars below
+  //   - "local"                — needs UPLOAD_DIR + PUBLIC_BASE_URL
+  // An unknown value boot-fails in StorageModule's factory.
+  @IsIn(['cloudinary', 'local'])
+  @IsOptional()
+  STORAGE_DRIVER?: 'cloudinary' | 'local';
+
   @IsString()
   @IsOptional()
   UPLOAD_DIR?: string;

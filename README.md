@@ -98,7 +98,7 @@ Image bytes live on Cloudinary; the DB stores only the `public_id`. Cloudinary's
 
 The env validator refuses to boot if `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` are missing.
 
-**Switching back to local disk for offline dev:** flip `useClass: CloudinaryStorageService` → `LocalStorageService` in `src/storage/storage.module.ts`. `LocalStorageService` is kept as a drop-in fallback; both implement the same abstract `StorageService` DI token.
+**Switching back to local disk for offline dev:** set `STORAGE_DRIVER=local` in `.env`. The `StorageModule` factory picks the impl at boot — no code edit, no rebuild. Unknown values fail boot loudly rather than silently misroute uploads. Both impls share the same abstract `StorageService` DI token, so consumers (e.g. `PostsService`) don't care which is active.
 
 > **Migration note:** existing DB rows with local keys like `posts/<uuid>.webp` will not resolve against Cloudinary. Wipe `posts.image_key` on switchover, or run a script that re-uploads the local files and rewrites the keys.
 
