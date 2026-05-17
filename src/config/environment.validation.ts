@@ -122,18 +122,39 @@ class EnvironmentVariables {
   @IsOptional()
   CORS_ORIGIN?: string;
 
-  // ---- Storage (local disk; swap to S3 / MinIO in prod) ----
+  // ---- Storage ----
+  // Image bytes live on Cloudinary; only the public_id is persisted in our DB.
+  // UPLOAD_DIR / PUBLIC_BASE_URL kept optional so LocalStorageService remains
+  // a drop-in fallback for offline dev (swap useClass in StorageModule).
   @IsString()
-  @IsNotEmpty()
-  UPLOAD_DIR!: string;
+  @IsOptional()
+  UPLOAD_DIR?: string;
 
   @IsUrl({ require_tld: false, require_protocol: true })
-  PUBLIC_BASE_URL!: string;
+  @IsOptional()
+  PUBLIC_BASE_URL?: string;
 
   @IsNumber()
   @Min(1)
   @Max(50)
   MAX_IMAGE_SIZE_MB!: number;
+
+  // ---- Cloudinary ----
+  @IsString()
+  @IsNotEmpty()
+  CLOUDINARY_CLOUD_NAME!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  CLOUDINARY_API_KEY!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  CLOUDINARY_API_SECRET!: string;
+
+  @IsString()
+  @IsOptional()
+  CLOUDINARY_FOLDER?: string;
 }
 
 export function validateEnvironment(config: Record<string, unknown>) {

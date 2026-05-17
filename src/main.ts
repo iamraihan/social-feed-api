@@ -3,7 +3,6 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
-import * as path from 'node:path';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
@@ -61,20 +60,11 @@ async function bootstrap() {
   // (CONFLICT, NOT_FOUND) instead of leaked Prisma codes (P2002, P2025).
   app.useGlobalFilters(new PrismaExceptionFilter(), new HttpExceptionFilter());
 
-  // Serve user-uploaded images from the local storage directory. Path matches
-  // what LocalStorageService.url() builds (`/uploads/<key>`). In production
-  // this would be replaced by a CDN serving from S3, but the URL shape stays
-  // the same so frontend code doesn't change.
-  //
-  // Trade-off: this serves every uploaded file without auth — including images
-  // attached to PRIVATE posts. Post visibility hides the post body and metadata
-  // (a non-author gets 404 on GET /posts/:id), but the IMAGE URL itself is
-  // public if leaked. This matches what Twitter/Instagram/Facebook do — image
-  // privacy is via URL obscurity (random UUID filenames). True per-image auth
-  // would require either signed URLs with TTL or a guarded /posts/:id/image
-  // streaming endpoint; both are reasonable next steps for a stricter spec.
-  const uploadDir = process.env.UPLOAD_DIR ?? './uploads';
-  app.useStaticAssets(path.resolve(uploadDir), { prefix: '/uploads' });
+  // Image bytes are served by Cloudinary's CDN, not this process — no static
+  // asset middleware needed. Image privacy is via URL obscurity (random UUID
+  // public_ids); private-post bodies remain gated by the visibility checks on
+  // GET /posts/:id. Signed URLs / a guarded streaming endpoint are the next
+  // step if a stricter spec demands per-image auth.
 
   // Forward SIGTERM/SIGINT into Nest lifecycle hooks — needed so Prisma and
   // the Redis client close cleanly on container stop / k8s rolling restart.
